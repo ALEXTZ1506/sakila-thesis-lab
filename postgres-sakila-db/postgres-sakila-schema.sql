@@ -1709,3 +1709,128 @@ GRANT ALL ON SCHEMA public TO PUBLIC;
 -- PostgreSQL database dump complete
 --
 
+-- =============================================================================
+-- EXTENDED TABLES AND FEATURES FOR PERFORMANCE TESTING (POSTGRES CORRECTED)
+-- =============================================================================
+
+-- EXTRA TABLES FOR AUDITING AND ANALYTICS
+CREATE TABLE IF NOT EXISTS audit_rental (
+  audit_id SERIAL PRIMARY KEY,
+  rental_id INT,
+  action VARCHAR(10) NOT NULL, -- INSERT, UPDATE, DELETE
+  changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor_user VARCHAR(64) NULL,
+  before_json TEXT NULL,
+  after_json TEXT NULL
+);
+CREATE INDEX idx_audit_rental_rental_id ON audit_rental(rental_id);
+CREATE INDEX idx_audit_rental_changed_at ON audit_rental(changed_at);
+
+CREATE TABLE IF NOT EXISTS audit_payment (
+  audit_id SERIAL PRIMARY KEY,
+  payment_id INT,
+  action VARCHAR(10) NOT NULL,
+  changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor_user VARCHAR(64) NULL,
+  before_json TEXT NULL,
+  after_json TEXT NULL
+);
+CREATE INDEX idx_audit_payment_payment_id ON audit_payment(payment_id);
+CREATE INDEX idx_audit_payment_changed_at ON audit_payment(changed_at);
+
+CREATE TABLE IF NOT EXISTS sales_rollup_daily (
+  sales_date DATE NOT NULL,
+  store_id INT NOT NULL,
+  category_id INT NOT NULL,
+  total_sales DECIMAL(18,2) NOT NULL DEFAULT 0,
+  tx_count INT NOT NULL DEFAULT 0,
+  last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (sales_date, store_id, category_id),
+  CONSTRAINT fk_srd_store FOREIGN KEY (store_id) REFERENCES store(store_id),
+  CONSTRAINT fk_srd_cat FOREIGN KEY (category_id) REFERENCES category(category_id)
+);
+
+CREATE TABLE IF NOT EXISTS customer_kpis (
+  customer_id INT PRIMARY KEY,
+  rentals_count BIGINT NOT NULL DEFAULT 0,
+  active_rentals INT NOT NULL DEFAULT 0,
+  total_spent DECIMAL(18,2) NOT NULL DEFAULT 0,
+  last_payment TIMESTAMP NULL,
+  last_rental TIMESTAMP NULL,
+  balance_cached DECIMAL(18,2) NOT NULL DEFAULT 0,
+  last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ck_customer FOREIGN KEY (customer_id) REFERENCES customer(customer_id)
+);
+
+CREATE TABLE IF NOT EXISTS inventory_status (
+  inventory_id INT PRIMARY KEY,
+  film_id INT NOT NULL,
+  store_id INT NOT NULL,
+  is_in_stock BOOLEAN NOT NULL,
+  total_rentals INT NOT NULL DEFAULT 0,
+  last_rental TIMESTAMP NULL,
+  last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_is_inventory FOREIGN KEY (inventory_id) REFERENCES inventory(inventory_id),
+  CONSTRAINT fk_is_film FOREIGN KEY (film_id) REFERENCES film(film_id),
+  CONSTRAINT fk_is_store FOREIGN KEY (store_id) REFERENCES store(store_id)
+);
+
+-- REFRESH PROCEDURES
+
+CREATE OR REPLACE PROCEDURE sp_refresh_sales_rollup(p_start DATE, p_end DATE)
+LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM sales_rollup_daily WHERE sales_date BETWEEN p_start AND p_end;
+
+  INSERT INTO sales_rollup_daily (sales_date, store_id, category_id, total_sales, tx_count)
+  SELECT p.payment_date::DATE, s.store_id, COALESCE(fc.category_id,0),
+         SUM(p.amount), COUNT(*)
+  FROM payment p
+  JOIN rental r      ON r.rental_id = p.rental_id
+  JOIN inventory i   ON i.inventory_id = r.inventory_id
+  JOIN store s       ON s.store_id = i.store_id
+  LEFT JOIN film f   ON f.film_id = i.film_id
+  LEFT JOIN film_category fc ON fc.film_id = f.film_id
+  WHERE p.payment_date::DATE BETWEEN p_start AND p_end
+  GROUP BY p.payment_date::DATE, s.store_id, fc.category_id;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE sp_refresh_customer_kpis()
+LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM customer_kpis;
+  INSERT INTO customer_kpis (customer_id, rentals_count, active_rentals, total_spent, last_payment, last_rental, balance_cached)
+  SELECT
+    c.customer_id,
+    (SELECT COUNT(*) FROM rental r WHERE r.customer_id=c.customer_id),
+    (SELECT COUNT(*) FROM rental r WHERE r.customer_id=c.customer_id AND r.return_date IS NULL),
+    COALESCE((SELECT SUM(p.amount) FROM payment p WHERE p.customer_id=c.customer_id),0),
+    (SELECT MAX(p.payment_date) FROM payment p WHERE p.customer_id=c.customer_id),
+    (SELECT MAX(r.rental_date) FROM rental r WHERE r.customer_id=c.customer_id),
+    COALESCE((SELECT SUM(p.amount) FROM payment p WHERE p.customer_id=c.customer_id),0)
+  FROM customer c;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE sp_refresh_inventory_status()
+LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM inventory_status;
+  INSERT INTO inventory_status(inventory_id, film_id, store_id, is_in_stock, total_rentals, last_rental)
+  SELECT i.inventory_id, i.film_id, i.store_id,
+         NOT EXISTS(SELECT 1 FROM rental r WHERE r.inventory_id=i.inventory_id AND r.return_date IS NULL),
+         (SELECT COUNT(*) FROM rental r WHERE r.inventory_id=i.inventory_id),
+         (SELECT MAX(rental_date) FROM rental r WHERE r.inventory_id=i.inventory_id)
+  FROM inventory i;
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE sp_populate_extended_tables()
+LANGUAGE plpgsql AS $$
+BEGIN
+  CALL sp_refresh_customer_kpis();
+  CALL sp_refresh_inventory_status();
+  CALL sp_refresh_sales_rollup('2005-01-01', '2025-12-31'); 
+END;
+$$;
