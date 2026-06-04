@@ -1,10 +1,17 @@
 -- =============================================================================
--- QUERY #2: DEEP CUSTOMER PROFILING (CPU STRESS)
--- Objective: Force the "N+1" problem by multiplying logical operations for each customer.
+-- QUERY 02: PERFILADO PROFUNDO DE CLIENTES (MariaDB)
+-- =============================================================================
+-- MAPEO R        : R4 (consulta analitica compleja) - pieza COMPLEMENTARIA
+-- RECURSOS       : CPU (4 subqueries correlacionadas x ~599 clientes activos
+--                  = ~2400 ejecuciones de subquery por corrida).
+-- CONTRAPARTE PG : ../../postgres-sakila-db/queries/02_Subqueries_CPU.sql
+-- =============================================================================
+-- OBJETIVO: Forzar el "problema N+1" multiplicando operaciones logicas por cliente.
+--
+-- NOTA SOBRE SQL_NO_CACHE (removido): ver explicacion en 01_Analytics_RAM.sql.
 -- =============================================================================
 
-SELECT 
-    SQL_NO_CACHE,
+SELECT
     c.customer_id,
     
     CONCAT(UPPER(c.last_name), ', ', c.first_name, ' [', LENGTH(c.email), ']') AS client_profile,

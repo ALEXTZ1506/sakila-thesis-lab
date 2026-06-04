@@ -1,10 +1,25 @@
 -- =============================================================================
--- QUERY #1: FINANCIAL PERFORMANCE BY COUNTRY, CITY, STORE, CATEGORY, AND MONTH
--- Objective: Saturate RAM with 11 Joins and force disk sorting.
+-- QUERY 01: ANALISIS FINANCIERO POR PAIS, CIUDAD, TIENDA, CATEGORIA Y MES (MariaDB)
+-- =============================================================================
+-- MAPEO R        : R4 (consulta analitica compleja) - pieza PRINCIPAL
+-- RECURSOS       : RAM (sort en disco por GROUP BY de 6 columnas + ORDER BY),
+--                  I/O en tablas de hechos (rental, payment), CPU moderado.
+-- CONTRAPARTE PG : ../../postgres-sakila-db/queries/01_Analytics_RAM.sql
+-- =============================================================================
+-- OBJETIVO: Saturar RAM con 12 JOINs (13 tablas) y forzar sort en disco.
+--
+-- NOTA SOBRE SQL_NO_CACHE (removido):
+--   El hint SQL_NO_CACHE solo invalida el query cache (resultados cacheados),
+--   no el InnoDB buffer pool que es el cache real para benchmarks de lectura.
+--   MariaDB 11.4 tiene el query cache desactivado por defecto y en proceso
+--   de deprecacion, asi que el hint es funcionalmente nulo. La gestion de
+--   cache para mediciones se hace a nivel de configuracion del motor
+--   (my.cnf) + reinicio del servicio entre runs, lo cual mantiene simetria
+--   con PostgreSQL (donde no existe hint equivalente y se usa el mismo
+--   approach).
 -- =============================================================================
 
-SELECT 
-    SQL_NO_CACHE,
+SELECT
     c.country,
     ci.city,
     s.store_id,

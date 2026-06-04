@@ -1,0 +1,61 @@
+# =============================================================================
+# .gitignore for sakila-thesis-lab
+# Comments in English by convention; everything else in the repo uses Spanish.
+# =============================================================================
+
+# ---- OS-specific ----
+[Tt]humbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+.DS_Store
+.Spotlight-V100
+.Trashes
+$RECYCLE.BIN/
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.*.un~
+*.sublime-project
+*.sublime-workspace
+
+# ---- Local SQL outputs and backups ----
+*.bak
+*.dump
+*.tar.gz
+*.sql.gz
+*.zip
+
+# ---- Local logs (e.g. pulled from VMs for off-host analysis) ----
+*.log
+audit-logs-*/
+audit_*.csv
+audit_*.json
+
+# ---- Sysbench artifacts ----
+sbtest.*
+sysbench-*.out
+
+# ---- Local measurement results (analyzed externally; go into thesis Ch. IV) ----
+results/
+*.results
+
+# ---- Credentials and secrets ----
+.env
+.env.*
+*.pem
+*.key
+*.crt
+credentials.*
+secrets.*
+
+# ---- Python / venv (for ad-hoc local analysis scripts) ----
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -1720,6 +1720,7 @@ CREATE TABLE IF NOT EXISTS audit_rental (
   action VARCHAR(10) NOT NULL, -- INSERT, UPDATE, DELETE
   changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actor_user VARCHAR(64) NULL,
+  actor_host VARCHAR(128) NULL,
   before_json TEXT NULL,
   after_json TEXT NULL
 );
@@ -1732,6 +1733,7 @@ CREATE TABLE IF NOT EXISTS audit_payment (
   action VARCHAR(10) NOT NULL,
   changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actor_user VARCHAR(64) NULL,
+  actor_host VARCHAR(128) NULL,
   before_json TEXT NULL,
   after_json TEXT NULL
 );
@@ -1831,6 +1833,272 @@ LANGUAGE plpgsql AS $$
 BEGIN
   CALL sp_refresh_customer_kpis();
   CALL sp_refresh_inventory_status();
-  CALL sp_refresh_sales_rollup('2005-01-01', '2025-12-31'); 
+  CALL sp_refresh_sales_rollup('2005-01-01', '2012-12-31');
+END;
+$$;
+
+-- sp_seed_synthetic_data: port PostgreSQL del procedure MariaDB del mismo
+-- nombre. Genera carga sintetica de clientes, rentals y payments sobre el
+-- esquema Pagila. Usado por el caso R3 (insercion masiva) y como
+-- alternativa a sysbench cuando se necesita workload sobre el esquema
+-- nativo Sakila/Pagila en lugar del esquema sbtest.
+--
+-- FIRMA SIMETRICA con la version MariaDB:
+--   p_customers           : numero de clientes nuevos a crear
+--   p_days                : ventana temporal hacia atras (rental_date
+--                           = CURRENT_TIMESTAMP - d days)
+--   p_avg_rentals_per_day : rentals/payments generados por dia
+--
+-- OPTIMIZACION (vs ORDER BY RANDOM() LIMIT 1):
+--   El pick aleatorio sobre inventory/customer/staff se hace con un
+--   offset aleatorio acotado por [MIN(pk), MAX(pk)] y lookup indexado
+--   por PK + LIMIT 1. Complejidad O(log N) en vez de O(N log N).
+--   Se eligio sobre TABLESAMPLE SYSTEM/BERNOULLI porque (a) TABLESAMPLE
+--   no existe en MariaDB y rompe la simetria metodologica, (b) introduce
+--   sesgo a nivel pagina, (c) puede devolver 0 filas para tablas
+--   pequenas como staff (2 filas) sin logica de retry. La tecnica
+--   elegida es identica en ambos motores, lo cual permite atribuir
+--   cualquier diferencia de overhead medida al motor o al plugin de
+--   auditoria, no a la implementacion del seed.
+--
+-- ROBUSTEZ:
+--   En vez de depender de LAST_INSERT_ID() o equivalente, usamos
+--   RETURNING ... INTO para capturar el rental_id recien generado.
+--   Inmune a efectos colaterales de cualquier trigger AFTER INSERT.
+--
+-- TOLERANCIA A COLISIONES (UNIQUE INDEX):
+--   v_when es constante por dia y los picks aleatorios pueden repetir
+--   (v_inv, v_cust). Probabilidad por colision con p_avg=100: ~0.2% por
+--   iteracion (~6 colisiones esperadas en p_days=30, p_avg=100). Para no
+--   abortar el procedure usamos INSERT ... ON CONFLICT (rental_date,
+--   inventory_id, customer_id) DO NOTHING (la index inference matchea
+--   idx_unq_rental_rental_date_inventory_id_customer_id). Si v_rental_id
+--   queda NULL tras el RETURNING, saltamos UPDATE y payment, contamos
+--   en v_skipped y seguimos. Implicacion: p_avg_rentals_per_day es un
+--   OBJETIVO, no garantizado; la perdida esperada es <1% para p_avg<=100.
+--   El procedure reporta v_skipped al final via RAISE NOTICE.
+--
+-- NOTA DE RANGO TEMPORAL:
+--   Las fechas generadas son CURRENT_TIMESTAMP - d days, igual que la
+--   version MariaDB. Estas fechas NO caen en el rango 2005-2011 de los
+--   datos inflados ni en el rango de los rollups (ver sp_populate_
+--   extended_tables). Implicacion: si se ejecuta sp_populate_extended_
+--   tables DESPUES de sp_seed_synthetic_data, los datos sembrados no
+--   apareceran en sales_rollup_daily salvo que se extienda el rango.
+--   Decision aceptada para mantener equivalencia semantica con MariaDB;
+--   ver ACCION 8 para el ajuste del rango de rollup.
+
+CREATE OR REPLACE PROCEDURE sp_seed_synthetic_data(
+    p_customers           INT,
+    p_days                INT,
+    p_avg_rentals_per_day INT
+)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v             INT := 0;
+    d             INT := 0;
+    r             INT;
+    v_inv         INT;
+    v_store       INT;
+    v_cust        INT;
+    v_staff       INT;
+    v_addr_id     INT;
+    v_rental_id   INT;
+    v_inv_lo      INT;
+    v_inv_hi      INT;
+    v_cust_lo     INT;
+    v_cust_hi     INT;
+    v_staff_lo    INT;
+    v_staff_hi    INT;
+    v_when        TIMESTAMP;
+    v_skipped     INT := 0;
+BEGIN
+    -- Fase 1: insertar p_customers clientes sinteticos con direccion fresca.
+    WHILE v < p_customers LOOP
+        INSERT INTO address (address, district, city_id, phone)
+        VALUES ('Addr ' || gen_random_uuid()::text, 'NA', 1, '000')
+        RETURNING address_id INTO v_addr_id;
+
+        INSERT INTO customer (store_id, first_name, last_name, email, address_id, activebool, create_date, active)
+        VALUES (1,
+                'C' || gen_random_uuid()::text,
+                'X',
+                gen_random_uuid()::text || '@ex.com',
+                v_addr_id,
+                TRUE,
+                CURRENT_DATE,
+                1);
+
+        v := v + 1;
+    END LOOP;
+
+    -- Capturar limites de PK DESPUES de sembrar clientes (inventory y staff son estaticos).
+    SELECT MIN(inventory_id), MAX(inventory_id) INTO v_inv_lo,   v_inv_hi   FROM inventory;
+    SELECT MIN(customer_id),  MAX(customer_id)  INTO v_cust_lo,  v_cust_hi  FROM customer;
+    SELECT MIN(staff_id),     MAX(staff_id)     INTO v_staff_lo, v_staff_hi FROM staff;
+
+    -- Fase 2: generar rentals y payments simulando workload diario.
+    d := 0;
+    WHILE d < p_days LOOP
+        r := 0;
+        -- Cache del timestamp del dia (evita 3 llamadas a CURRENT_TIMESTAMP por iteracion).
+        v_when := CURRENT_TIMESTAMP - (d || ' days')::interval;
+        WHILE r < p_avg_rentals_per_day LOOP
+            -- Pick aleatorio sobre inventory (lookup indexado por PK).
+            SELECT inventory_id, store_id INTO v_inv, v_store
+            FROM inventory
+            WHERE inventory_id >= v_inv_lo + FLOOR(random() * (v_inv_hi - v_inv_lo + 1))::INT
+            ORDER BY inventory_id
+            LIMIT 1;
+
+            -- Pick aleatorio sobre customer.
+            SELECT customer_id INTO v_cust
+            FROM customer
+            WHERE customer_id >= v_cust_lo + FLOOR(random() * (v_cust_hi - v_cust_lo + 1))::INT
+            ORDER BY customer_id
+            LIMIT 1;
+
+            -- Pick aleatorio sobre staff.
+            SELECT staff_id INTO v_staff
+            FROM staff
+            WHERE staff_id >= v_staff_lo + FLOOR(random() * (v_staff_hi - v_staff_lo + 1))::INT
+            ORDER BY staff_id
+            LIMIT 1;
+
+            -- ON CONFLICT DO NOTHING evita abortar el procedure si la combinacion
+            -- (rental_date, inventory_id, customer_id) ya existe. Sin fila insertada,
+            -- el RETURNING no devuelve valor y v_rental_id queda NULL.
+            v_rental_id := NULL;
+            INSERT INTO rental (rental_date, inventory_id, customer_id, return_date, staff_id)
+            VALUES (v_when, v_inv, v_cust, NULL, v_staff)
+            ON CONFLICT (rental_date, inventory_id, customer_id) DO NOTHING
+            RETURNING rental_id INTO v_rental_id;
+
+            IF v_rental_id IS NULL THEN
+                -- Colision: la combinacion ya existia. Saltamos UPDATE y payment.
+                v_skipped := v_skipped + 1;
+            ELSE
+                -- ~50% de las rentals tienen return_date dentro de 3 dias.
+                IF random() > 0.5 THEN
+                    UPDATE rental
+                    SET return_date = v_when + (FLOOR(random() * 3) || ' days')::interval
+                    WHERE rental_id = v_rental_id;
+                END IF;
+
+                -- Insertar payment ligado al rental.
+                INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
+                VALUES (v_cust, v_staff, v_rental_id, ROUND((2.99 + random() * 7.0)::numeric, 2), v_when);
+            END IF;
+
+            r := r + 1;
+        END LOOP;
+        d := d + 1;
+    END LOOP;
+
+    -- Reporte de observabilidad para evidencia en logs de R3.
+    RAISE NOTICE 'sp_seed_synthetic_data: skipped % rows due to UNIQUE collisions', v_skipped;
+END;
+$$;
+
+-- sp_random_workload: port PostgreSQL del procedure MariaDB homonimo.
+-- Genera un patron de workload mixto lectura/escritura para los casos
+-- R2 (OLTP 80/20) y R5 (carga sostenida 30 min). Cada iteracion ejecuta
+-- tres consultas representativas:
+--   Q1: agregacion por cliente (SELECT pesado, 3-table aggregation)
+--   Q2: busqueda full-text sobre film
+--   Q3: UPDATE de 10 payments ALEATORIOS via TEMP TABLE
+--
+-- DIFERENCIAS RESPECTO A LA VERSION MARIADB:
+--   * Q1 usa PERFORM en vez de SELECT standalone porque PL/pgSQL exige
+--     que SELECT vaya a una variable o a PERFORM cuando no se consume el
+--     resultado. El motor sigue ejecutando la query completa (join +
+--     group + order + limit); solo se descarta el result set. Implicacion
+--     de medicion: en MariaDB la query devuelve filas al cliente (overhead
+--     de red); en PostgreSQL no. Asimetria minor que afecta timing
+--     absoluto pero no la comparacion auditoria vs baseline.
+--   * Q2 usa film.fulltext @@ websearch_to_tsquery('english','action love')
+--     porque Pagila guarda el indice full-text como columna tsvector en
+--     film, no como tabla auxiliar film_text+FULLTEXT como en Sakila.
+--     Stemming via diccionario 'english'; "action love" matchea OR-like
+--     terminos individuales, semantica cercana a NATURAL LANGUAGE MODE.
+--   * Q3 usa CREATE TEMP TABLE IF NOT EXISTS + DROP TABLE explicito por
+--     iteracion, igual que MariaDB. ON COMMIT DROP no se aplica porque el
+--     procedure no contiene COMMIT; el DROP explicito al final de cada
+--     iteracion mantiene paridad con MariaDB.
+--   * UPDATE multi-tabla: PostgreSQL usa UPDATE ... FROM (no JOIN) que es
+--     la sintaxis nativa equivalente.
+--
+-- MEJORA SOBRE EL COMPORTAMIENTO HEREDADO (Q3):
+--   El procedure original tomaba los 10 payment_id MAS ALTOS por
+--   iteracion, lo cual concentra todas las escrituras de R5 en los
+--   mismos 10 payments y sesga la auditoria. Esta version selecciona
+--   10 payment_id ALEATORIOS usando la misma tecnica de
+--   sp_seed_synthetic_data: offset aleatorio acotado por [MIN, MAX]
+--   + lookup indexado por PK + LIMIT 1, repetido 10 veces. Resultado:
+--   las escrituras de R5 se distribuyen sobre el espacio completo de
+--   payment_id y la carga de auditoria refleja un workload realista.
+--   La misma mejora esta aplicada en la version MariaDB para preservar
+--   simetria de medicion.
+
+CREATE OR REPLACE PROCEDURE sp_random_workload(p_iters INT)
+LANGUAGE plpgsql AS $$
+DECLARE
+    i        INT := 0;
+    v_pay_lo INT;
+    v_pay_hi INT;
+BEGIN
+    -- Capturar limites de payment_id una sola vez. Acepta sesgo menor si
+    -- otras sesiones insertan payments concurrentemente durante la
+    -- ejecucion (los nuevos payment_id no se sampleran). Compromise
+    -- consciente para evitar 2 queries adicionales por iteracion.
+    SELECT MIN(payment_id), MAX(payment_id) INTO v_pay_lo, v_pay_hi FROM payment;
+
+    WHILE i < p_iters LOOP
+        -- Q1: agregado pesado sobre customer + rental + payment.
+        PERFORM c.customer_id,
+                COUNT(r.rental_id)              AS cnt,
+                COALESCE(SUM(p.amount), 0)      AS amt
+        FROM customer c
+        LEFT JOIN rental  r ON r.customer_id = c.customer_id
+        LEFT JOIN payment p ON p.customer_id = c.customer_id
+        GROUP BY c.customer_id
+        ORDER BY COALESCE(SUM(p.amount), 0) DESC
+        LIMIT 200;
+
+        -- Q2: busqueda full-text sobre film.fulltext (tsvector + GIST).
+        PERFORM f.film_id, f.title
+        FROM film f
+        WHERE f.fulltext @@ websearch_to_tsquery('english', 'action love')
+        ORDER BY f.rental_rate DESC
+        LIMIT 100;
+
+        -- Q3: UPDATE de 10 payments ALEATORIOS via TEMP TABLE.
+        -- 10 picks indexados por PK con offset aleatorio acotado por
+        -- [v_pay_lo, v_pay_hi]; ON CONFLICT DO NOTHING absorbe picks
+        -- duplicados (probabilidad <1 en 50K para payment ~513K).
+        CREATE TEMPORARY TABLE IF NOT EXISTS temp_recent_payments (
+            payment_id INT PRIMARY KEY
+        );
+
+        DELETE FROM temp_recent_payments;
+
+        FOR k IN 1..10 LOOP
+            INSERT INTO temp_recent_payments
+            SELECT payment_id FROM payment
+            WHERE payment_id >= v_pay_lo + FLOOR(random() * (v_pay_hi - v_pay_lo + 1))::INT
+            ORDER BY payment_id
+            LIMIT 1
+            ON CONFLICT DO NOTHING;
+        END LOOP;
+
+        UPDATE payment
+        SET amount = amount + 0.01
+        FROM temp_recent_payments tmp
+        WHERE payment.payment_id = tmp.payment_id;
+
+        DROP TABLE temp_recent_payments;
+
+        i := i + 1;
+    END LOOP;
 END;
 $$;

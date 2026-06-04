@@ -1,10 +1,19 @@
 -- =============================================================================
--- QUERY #3: FULL-TEXT SEARCH AND STRING CRUNCHING
--- Objective: Stress the file subsystem (MyISAM/InnoDB) and burn CPU processing strings.
+-- QUERY 03: BUSQUEDA FULL-TEXT Y CRUNCHING DE STRINGS (MariaDB)
+-- =============================================================================
+-- MAPEO R        : Ninguno directamente - stress complementario fuera de R1-R5.
+--                  Se conserva como evidencia auxiliar del subsistema full-text;
+--                  la tesis la menciona como prueba opcional.
+-- RECURSOS       : I/O (FULLTEXT sobre film_text MyISAM), CPU para hashing
+--                  (SHA1) y manipulacion de strings (REVERSE, SUBSTRING).
+-- CONTRAPARTE PG : ../../postgres-sakila-db/queries/03_FullText_IO.sql
+-- =============================================================================
+-- OBJETIVO: Estresar el subsistema full-text (MyISAM) y la CPU procesando strings.
+--
+-- NOTA SOBRE SQL_NO_CACHE (removido): ver explicacion en 01_Analytics_RAM.sql.
 -- =============================================================================
 
-SELECT 
-    SQL_NO_CACHE,
+SELECT
     f.title,
     
     MATCH(ft.title, ft.description) AGAINST('action adventure drama love war robot' IN NATURAL LANGUAGE MODE) AS relevance_score,
