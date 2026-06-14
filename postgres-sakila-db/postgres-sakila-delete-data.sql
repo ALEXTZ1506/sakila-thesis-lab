@@ -1,24 +1,39 @@
--- Delete data
-ALTER TABLE store DROP CONSTRAINT store_manager_staff_id_fkey;
-ALTER TABLE staff DROP CONSTRAINT staff_address_id_fkey;
-ALTER TABLE staff DROP CONSTRAINT staff_store_id_fkey;
+-- =============================================================================
+-- SCRIPT: Delete Data (PostgreSQL)
+-- OBJETIVO: vaciar TODOS los datos dejando la estructura intacta. Util para
+--   resetear entre corridas sin recargar el esquema.
+--
+-- Se usa TRUNCATE ... RESTART IDENTITY CASCADE porque:
+--   * CASCADE resuelve el orden de las claves foraneas automaticamente;
+--   * TRUNCATE sobre `payment` (sin ONLY) vacia tambien sus particiones hijas
+--     payment_p2007_01..06;
+--   * TRUNCATE NO dispara los triggers de fila, asi que las tablas audit_*
+--     no se repueblan aunque la configuracion C3 este activa;
+--   * RESTART IDENTITY reinicia las secuencias a su valor inicial.
+--
+-- Cubre tablas canonicas de Sakila + extendidas de la tesis (audit_rental,
+-- audit_payment, sales_rollup_daily, customer_kpis, inventory_status).
+-- =============================================================================
 
-DELETE FROM payment ;
-DELETE FROM rental ;
-DELETE FROM customer ;
-DELETE FROM film_category ;
-DELETE FROM film_actor ;
-DELETE FROM inventory ;
-DELETE FROM film ;
-DELETE FROM category ;
-DELETE FROM staff ;
-DELETE FROM store ;
-DELETE FROM actor ;
-DELETE FROM address ;
-DELETE FROM city ;
-DELETE FROM country ;
-DELETE FROM language ;
-
-ALTER TABLE staff ADD CONSTRAINT staff_address_id_fkey FOREIGN KEY (address_id) REFERENCES address (address_id) ON UPDATE CASCADE;
-ALTER TABLE staff ADD CONSTRAINT staff_store_id_fkey FOREIGN KEY (store_id) REFERENCES store (store_id) ON UPDATE CASCADE;
-ALTER TABLE store ADD CONSTRAINT store_manager_staff_id_fkey FOREIGN KEY (manager_staff_id) REFERENCES staff(staff_id) ON UPDATE CASCADE ON DELETE RESTRICT;
+TRUNCATE TABLE
+    audit_rental,
+    audit_payment,
+    sales_rollup_daily,
+    customer_kpis,
+    inventory_status,
+    payment,
+    rental,
+    inventory,
+    film_actor,
+    film_category,
+    film,
+    customer,
+    store,
+    staff,
+    address,
+    city,
+    country,
+    category,
+    language,
+    actor
+RESTART IDENTITY CASCADE;

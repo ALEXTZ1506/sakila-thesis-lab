@@ -83,9 +83,24 @@ FROM rental;
 -- ---------------------------------------------------------
 -- STEP 2: Inflate PAYMENT table
 --   NOTE: rental_id is set to NULL on inflated rows by design (see header).
+--
+--   PARTICIONADO: las RULES `payment_insert_p2007_0X` enrutan por payment_date
+--   al rango 2007. Como las fechas infladas cruzan 2007, bajo INSERT...SELECT
+--   las reglas conditional DO INSTEAD DUPLICAN filas (payment terminaria en
+--   ~569k en vez de 513568). Se desactivan las RULES durante la inflacion para
+--   que las filas vayan directo a la tabla padre, igual que en MariaDB; se
+--   reactivan al terminar. Las particiones y sus triggers de auditoria quedan
+--   intactos.
 -- ---------------------------------------------------------
 
 DO $$ BEGIN RAISE NOTICE 'Inflating PAYMENT table...'; END$$;
+
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_01;
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_02;
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_03;
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_04;
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_05;
+ALTER TABLE payment DISABLE RULE payment_insert_p2007_06;
 
 INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
 SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '1 year'
@@ -106,6 +121,14 @@ FROM payment;
 INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
 SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '16 year'
 FROM payment;
+
+-- Reactivar las RULES de particionado (la operacion normal vuelve a enrutar).
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_01;
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_02;
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_03;
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_04;
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_05;
+ALTER TABLE payment ENABLE RULE payment_insert_p2007_06;
 
 SELECT
     (SELECT COUNT(*) FROM rental)  AS total_rentals,
