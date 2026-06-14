@@ -50,6 +50,12 @@ END$$;
 
 -- ---------------------------------------------------------
 -- STEP 1: Inflate RENTAL table
+-- Los offsets de anio son potencias de 2 (1, 2, 4, 8, 16), NO 1..5: cada
+-- iteracion duplica leyendo la tabla completa (incluidas las filas ya
+-- desplazadas en pasos previos), de modo que solo bloques de fechas disjuntos
+-- evitan colisionar con idx_unq_rental_rental_date_inventory_id_customer_id.
+-- Con 1,2,4,8,16 el rango cubierto es 0..31 anios sin solapes => 2^5 = 32x
+-- exacto y sin duplicados.
 -- ---------------------------------------------------------
 
 DO $$ BEGIN RAISE NOTICE 'Inflating RENTAL table...'; END$$;
@@ -63,15 +69,15 @@ SELECT rental_date + INTERVAL '2 year', inventory_id, customer_id, return_date +
 FROM rental;
 
 INSERT INTO rental (rental_date, inventory_id, customer_id, return_date, staff_id, last_update)
-SELECT rental_date + INTERVAL '3 year', inventory_id, customer_id, return_date + INTERVAL '3 year', staff_id, CURRENT_TIMESTAMP
-FROM rental;
-
-INSERT INTO rental (rental_date, inventory_id, customer_id, return_date, staff_id, last_update)
 SELECT rental_date + INTERVAL '4 year', inventory_id, customer_id, return_date + INTERVAL '4 year', staff_id, CURRENT_TIMESTAMP
 FROM rental;
 
 INSERT INTO rental (rental_date, inventory_id, customer_id, return_date, staff_id, last_update)
-SELECT rental_date + INTERVAL '5 year', inventory_id, customer_id, return_date + INTERVAL '5 year', staff_id, CURRENT_TIMESTAMP
+SELECT rental_date + INTERVAL '8 year', inventory_id, customer_id, return_date + INTERVAL '8 year', staff_id, CURRENT_TIMESTAMP
+FROM rental;
+
+INSERT INTO rental (rental_date, inventory_id, customer_id, return_date, staff_id, last_update)
+SELECT rental_date + INTERVAL '16 year', inventory_id, customer_id, return_date + INTERVAL '16 year', staff_id, CURRENT_TIMESTAMP
 FROM rental;
 
 -- ---------------------------------------------------------
@@ -90,15 +96,15 @@ SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '2 year'
 FROM payment;
 
 INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
-SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '3 year'
-FROM payment;
-
-INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
 SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '4 year'
 FROM payment;
 
 INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
-SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '5 year'
+SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '8 year'
+FROM payment;
+
+INSERT INTO payment (customer_id, staff_id, rental_id, amount, payment_date)
+SELECT customer_id, staff_id, NULL, amount, payment_date + INTERVAL '16 year'
 FROM payment;
 
 SELECT

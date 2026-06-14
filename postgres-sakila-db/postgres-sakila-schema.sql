@@ -431,10 +431,15 @@ CREATE TABLE payment (
     payment_id integer DEFAULT nextval('payment_payment_id_seq'::regclass) NOT NULL,
     customer_id integer NOT NULL,
     staff_id integer NOT NULL,
-    rental_id integer NOT NULL,
+    rental_id integer,
     amount numeric(5,2) NOT NULL,
     payment_date timestamp without time zone NOT NULL
 );
+-- NOTA: rental_id es NULLABLE (se removio el NOT NULL del dump original de
+-- Pagila) por tres razones convergentes: (1) simetria con MariaDB, donde
+-- payment.rental_id es `INT DEFAULT NULL`; (2) el propio FK payment_rental_id_fkey
+-- declara ON DELETE SET NULL, que exige una columna nullable; y (3) el script de
+-- inflacion inserta pagos con rental_id = NULL por diseno documentado.
 
 
 ALTER TABLE public.payment OWNER TO postgres;
