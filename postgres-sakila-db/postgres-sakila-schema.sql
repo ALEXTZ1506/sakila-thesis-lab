@@ -2007,7 +2007,7 @@ $$;
 
 -- sp_random_workload: port PostgreSQL del procedure MariaDB homonimo.
 -- Genera un patron de workload mixto lectura/escritura para los casos
--- R2 (OLTP 80/20) y R5 (carga sostenida 30 min). Cada iteracion ejecuta
+-- R2 (OLTP 80/20) y R5 (carga sostenida 10 min). Cada iteracion ejecuta
 -- tres consultas representativas:
 --   Q1: agregacion por cliente (SELECT pesado, 3-table aggregation)
 --   Q2: busqueda full-text sobre film

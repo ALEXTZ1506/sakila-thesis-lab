@@ -121,7 +121,7 @@ psql -U thesis -d pagila -c "CALL sp_populate_extended_tables();"
 | R2 | OLTP mixto 80/20 R/W | sysbench `oltp_read_write` + Q04 |
 | R3 | Inserción masiva sobre Sakila/Pagila | `CALL sp_seed_synthetic_data(...)` |
 | R4 | Consulta analítica compleja | Q01 (principal), Q02 (complementaria) |
-| R5 | Carga sostenida 30 min | sysbench `--time=1800` |
+| R5 | Carga sostenida 10 min | sysbench `--time=600` |
 
 Comandos exactos en [`docs/cases.md`](docs/cases.md).
 

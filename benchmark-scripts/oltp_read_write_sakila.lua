@@ -5,7 +5,7 @@
 -- OBJETIVO: Workload OLTP mixto lectura/escritura sobre el esquema Sakila
 --           (MariaDB) o Pagila (PostgreSQL), con concurrencia controlada
 --           por --threads. Pensado para los casos R2 (OLTP mixto 80/20) y
---           R5 (carga sostenida 30 min) bajo cualquiera de las 3
+--           R5 (carga sostenida 10 min) bajo cualquiera de las 3
 --           configuraciones de auditoria.
 --
 -- DECISION METODOLOGICA: ver header de oltp_read_only_sakila.lua.
@@ -33,14 +33,14 @@
 --     conteo en audit_payment es identico (cobertura simetrica documentada
 --     en docs/architecture.md §3).
 --
--- USO: identico a oltp_read_only_sakila.lua. Para R5 usar --time=1800.
+-- USO: identico a oltp_read_only_sakila.lua. Para R5 usar --time=600.
 --
 -- DERIVA DE DATOS (importante para R5 sostenido):
 --   Cada UPDATE rental setea return_date al timestamp actual; cada UPDATE
 --   payment incrementa amount en 0.01. Sobre corridas largas (R5 con
---   ~5K txn/seg durante 30 min) los datos se polucionan acumulativamente:
---   en promedio cada payment_id recibe ~70 incrementos, su amount sube
---   ~$0.70. Entre corridas de R5 (cambio de configuracion C1->C2->C3)
+--   ~5K txn/seg durante 10 min) los datos se polucionan acumulativamente:
+--   en promedio cada payment_id recibe ~23 incrementos, su amount sube
+--   ~$0.23. Entre corridas de R5 (cambio de configuracion C1->C2->C3)
 --   se debe RESTAURAR snapshot de la VM o revertir los cambios para
 --   que las 3 mediciones partan del mismo estado. Ver docs/cases.md §2.
 -- =============================================================================

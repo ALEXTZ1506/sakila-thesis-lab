@@ -268,11 +268,11 @@ $(cat postgres-sakila-db/queries/01_Analytics_RAM.sql | grep -v '^--')"
 
 ---
 
-## 7. R5 — Carga sostenida 30 minutos
+## 7. R5 — Carga sostenida 10 minutos
 
 **Herramienta:** mismo script Lua que R2
 ([`oltp_read_write_sakila.lua`](../benchmark-scripts/oltp_read_write_sakila.lua))
-con `--time=1800` y concurrencia fija.
+con `--time=600` y concurrencia fija.
 
 ```bash
 sysbench benchmark-scripts/oltp_read_write_sakila.lua \
@@ -280,7 +280,7 @@ sysbench benchmark-scripts/oltp_read_write_sakila.lua \
   --mysql-host=<IP> --mysql-user=thesis --mysql-password='<pwd>' \
   --mysql-db=sakila \
   --threads=50 \
-  --time=1800 \
+  --time=600 \
   --report-interval=30 \
   run
 ```
@@ -290,8 +290,8 @@ detectar deriva (drift) de latencia durante la corrida sostenida.
 
 > **Importante para R5: deriva acumulativa de datos.** Cada UPDATE
 > rental setea `return_date = CURRENT_TIMESTAMP` y cada UPDATE payment
-> incrementa `amount` en 0.01. Sobre 30 min a ~5K txn/seg, cada
-> payment_id recibe ~70 incrementos en promedio (deriva de ~$0.70 por
+> incrementa `amount` en 0.01. Sobre 10 min a ~5K txn/seg, cada
+> payment_id recibe ~23 incrementos en promedio (deriva de ~$0.23 por
 > payment). **Entre las 3 corridas de R5 (una por configuración) se
 > debe restaurar snapshot de la VM o revertir los cambios**, para que
 > las 3 mediciones partan del mismo estado. Ver §2 y header del script

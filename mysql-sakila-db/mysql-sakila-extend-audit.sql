@@ -20,7 +20,7 @@
 --      TIMESTAMP (second precision) to TIMESTAMP(6) (microsecond precision).
 --      Rationale: restores symmetry with PostgreSQL's default microsecond
 --      precision, prevents collisions on concurrent triggers under R5
---      (30-minute sustained load).
+--      (10-minute sustained load).
 --   2. Adds actor_host VARCHAR(128) NULL on both audit_* tables.
 --      Rationale: forensic columns for cases S1 (SQL injection) and S5
 --      (data exfiltration), where the attacker typically reuses legitimate

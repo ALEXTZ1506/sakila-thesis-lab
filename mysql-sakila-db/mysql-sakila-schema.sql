@@ -884,7 +884,7 @@ BEGIN
 END $$
 
 -- sp_random_workload: genera workload mixto lectura/escritura para los
--- casos R2 (OLTP 80/20) y R5 (carga sostenida 30 min). Cada iteracion
+-- casos R2 (OLTP 80/20) y R5 (carga sostenida 10 min). Cada iteracion
 -- ejecuta Q1 (agregado pesado), Q2 (full-text) y Q3 (UPDATE de 10
 -- payments aleatorios via TEMP TABLE). El port a PostgreSQL vive en
 -- ../postgres-sakila-db/postgres-sakila-schema.sql con la misma logica.
