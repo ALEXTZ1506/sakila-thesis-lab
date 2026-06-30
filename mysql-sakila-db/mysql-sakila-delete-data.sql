@@ -7,8 +7,8 @@
 -- Cubre las tablas canonicas de Sakila + las extendidas de la tesis
 -- (audit_rental, audit_payment, sales_rollup_daily, customer_kpis,
 -- inventory_status). Las tablas de auditoria se vacian al FINAL: si los
--- triggers C3 estan activos, los DELETE sobre rental/payment las repueblan,
--- asi que limpiarlas de ultimo garantiza que queden vacias.
+-- triggers complementarios estan activos, los DELETE sobre rental/payment las
+-- repueblan, asi que limpiarlas de ultimo garantiza que queden vacias.
 --
 -- Se desactivan los chequeos de FK para que el orden de borrado no importe.
 -- =============================================================================

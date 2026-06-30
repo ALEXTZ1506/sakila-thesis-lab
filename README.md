@@ -23,23 +23,25 @@ Laboratorio comparativo de auditoría en MariaDB y PostgreSQL. ULEAM.*
 
 ## Contexto
 
-La tesis contrasta el costo y la utilidad forense de **tres
+La tesis contrasta el costo y la utilidad forense de **dos
 configuraciones de auditoría** sobre dos motores de bases de datos
 relacionales, usando el esquema canónico Sakila (MariaDB) / Pagila
 (PostgreSQL) inflado a ~500K filas en las tablas de hechos:
 
 - **C1 — Baseline** (sin auditoría)
 - **C2 — Plugin nativo del motor** (server_audit en MariaDB, pgAudit en PostgreSQL)
-- **C3 — Triggers aplicativos** sobre tablas `audit_rental` / `audit_payment`
 
 Sobre 5 casos de rendimiento (R1–R5) y 5 casos de seguridad (S1–S5, en
 fase posterior), midiendo overhead y cobertura.
 
+> Los archivos `*-audit-triggers.sql` (auditoría a nivel aplicativo) son una
+> implementación complementaria del esquema, **no parte de la comparación
+> medida**. Ver [`docs/architecture.md`](docs/architecture.md) §1.
+
 ## Arquitectura del experimento
 
-Cuatro VMs Ubuntu 22.04 LTS sobre VirtualBox cubren la dimensión
-"plugin sí/no"; la dimensión "triggers sí/no" se controla cargando o no
-el archivo `*-audit-triggers.sql`.
+Cuatro VMs Ubuntu 24.04 LTS sobre VirtualBox, dos por motor: una sin plugin
+(C1, baseline) y una con plugin (C2).
 
 ```
                 MariaDB 11.4                  PostgreSQL 16
@@ -69,7 +71,7 @@ sakila-thesis-lab/
 │   ├── mysql-sakila-insert-data.sql              datos canonicos Sakila
 │   ├── mysql-sakila-insert-data-inflation.sql    inflation 32x
 │   ├── mysql-sakila-extend-audit.sql             ALTER retroactivos
-│   ├── mysql-sakila-audit-triggers.sql           6 triggers aplicativos (C3)
+│   ├── mysql-sakila-audit-triggers.sql           6 triggers aplicativos (complementario, no medido)
 │   ├── mysql-sakila-delete-data.sql              limpieza de datos
 │   ├── mysql-sakila-drop-objects.sql             drop de objetos
 │   └── queries/                                  4 queries por recurso
@@ -79,7 +81,7 @@ sakila-thesis-lab/
 │   ├── postgres-sakila-insert-data-using-copy.sql datos canonicos (formato COPY, recomendado)
 │   ├── postgres-sakila-insert-data-inflation.sql inflation 32x
 │   ├── postgres-sakila-extend-audit.sql          ALTER retroactivos
-│   ├── postgres-sakila-audit-triggers.sql        24 triggers aplicativos (C3)
+│   ├── postgres-sakila-audit-triggers.sql        24 triggers aplicativos (complementario, no medido)
 │   ├── postgres-sakila-delete-data.sql           limpieza de datos
 │   ├── postgres-sakila-drop-objects.sql          drop de objetos
 │   └── queries/                                  4 queries equivalentes
@@ -98,20 +100,25 @@ cd mysql-sakila-db
 mariadb -u thesis -p sakila < mysql-sakila-schema.sql
 mariadb -u thesis -p sakila < mysql-sakila-insert-data.sql
 mariadb -u thesis -p sakila < mysql-sakila-insert-data-inflation.sql
-mariadb -u thesis -p sakila < mysql-sakila-audit-triggers.sql   # solo para C3
 mariadb -u thesis -p sakila -e "CALL sp_populate_extended_tables();"
+# (mysql-sakila-audit-triggers.sql: complementario, NO cargar para mediciones)
 ```
 
 Carga completa en una VM PostgreSQL:
 
 ```bash
 cd postgres-sakila-db
-psql -U thesis -d pagila -f postgres-sakila-schema.sql
-psql -U thesis -d pagila -f postgres-sakila-insert-data-using-copy.sql
-psql -U thesis -d pagila -f postgres-sakila-insert-data-inflation.sql
-psql -U thesis -d pagila -f postgres-sakila-audit-triggers.sql   # solo para C3
-psql -U thesis -d pagila -c "CALL sp_populate_extended_tables();"
+export PGPASSWORD='<placeholder-pwd>'
+psql -h localhost -U thesis -d pagila -f postgres-sakila-schema.sql              # ~54 errores OWNER inofensivos
+sudo -u postgres psql -d pagila -f postgres-sakila-insert-data-using-copy.sql    # datos: como postgres (DISABLE TRIGGER)
+psql -h localhost -U thesis -d pagila -f postgres-sakila-insert-data-inflation.sql
+psql -h localhost -U thesis -d pagila -c "CALL sp_populate_extended_tables();"
+unset PGPASSWORD
+# (postgres-sakila-audit-triggers.sql: complementario, NO cargar para mediciones)
 ```
+
+Detalle del método de conexión y por qué los datos van como `postgres`:
+[`docs/setup.md`](docs/setup.md) §7.
 
 ## Casos experimentales
 
@@ -130,12 +137,13 @@ Comandos exactos en [`docs/cases.md`](docs/cases.md).
 - Concurrencia para R1/R2/R5 se obtiene con sysbench externo
   ejecutando los scripts Lua personalizados de `benchmark-scripts/`,
   que apuntan a las tablas auditadas de Sakila/Pagila.
-- R1+C3 produce métricas equivalentes a R1+C1 porque los triggers
-  no capturan SELECTs; se reporta como finding cualitativo, no gap.
+- R1 (solo lectura) puede mostrar overhead bajo C2 porque el plugin
+  audita SELECTs (`server_audit_events=QUERY` / `pgaudit.log='all'`).
 - Inflated payments tienen `rental_id = NULL` por diseño; queries OLAP
   joinando `payment → rental → ...` solo ven el 1/32 original.
-- PostgreSQL tiene 24 triggers de auditoría vs 6 en MariaDB; es
-  cobertura equivalente, no más auditoría — ver `docs/architecture.md` §3.
+- La implementación complementaria de triggers tiene 24 en PostgreSQL vs
+  6 en MariaDB; es cobertura equivalente, no más auditoría — ver
+  `docs/architecture.md` §3.
 
 Lista completa en [`docs/architecture.md`](docs/architecture.md) §5.
 
@@ -143,11 +151,11 @@ Lista completa en [`docs/architecture.md`](docs/architecture.md) §5.
 
 | Componente | Versión |
 |---|---|
-| Ubuntu Server | 22.04 LTS |
+| Ubuntu Server | 24.04 LTS |
 | MariaDB | 11.4 LTS |
 | PostgreSQL | 16 |
 | sysbench | 1.0.20 |
-| sqlmap, hydra | versión empacada en Ubuntu 22.04 |
+| sqlmap, hydra | versión empacada en Ubuntu 24.04 |
 
 Comandos de instalación en [`docs/setup.md`](docs/setup.md) §2.
 

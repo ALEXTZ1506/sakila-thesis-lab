@@ -10,12 +10,11 @@
 -- DECISION METODOLOGICA:
 --   Los scripts oficiales oltp_*.lua de sysbench operan sobre el esquema
 --   sbtest (tablas que crea sysbench prepare), ortogonal a Sakila/Pagila
---   y por lo tanto fuera del alcance de los triggers de auditoria
---   aplicativa (audit_rental, audit_payment). Para que las mediciones R1
---   bajo configuracion C3 reflejen la realidad del workload sobre las
---   tablas auditadas, este script imita la estructura del
---   oltp_read_only.lua oficial pero apunta directamente a rental y
---   payment.
+--   y por lo tanto fuera del alcance del plugin de auditoria sobre las
+--   tablas del dominio. Para que las mediciones R1 bajo el plugin (C2)
+--   auditen el workload real sobre rental y payment, este script imita la
+--   estructura del oltp_read_only.lua oficial pero apunta directamente a
+--   esas tablas.
 --
 -- PATRON POR TRANSACCION (14 SELECTs, sin escrituras):
 --   - 10 point SELECTs sobre rental por PK aleatorio
@@ -28,11 +27,9 @@
 --   - C1 (baseline): 0
 --   - C2 (plugin): 14 entradas en server_audit.log / postgresql.log
 --     (cada SELECT se loguea con events=QUERY,TABLE)
---   - C3 (triggers): 0 -- los triggers AFTER INSERT/UPDATE/DELETE NO
---     disparan en SELECTs. R1+C3 producira metricas equivalentes a
---     R1+C1, lo cual constituye un finding cualitativo de la tesis
---     (limitacion intrinseca del mecanismo trigger-based para auditar
---     lecturas; los plugins SI capturan SELECTs).
+--   (Nota: el plugin C2 SI audita SELECTs. Los triggers de auditoria
+--    aplicativa son implementacion complementaria, NO medida -- ver
+--    docs/architecture.md §1.)
 --
 -- USO:
 --   # MariaDB
@@ -48,8 +45,8 @@
 -- LIMITACIONES CONOCIDAS:
 --   * Las queries usan string.format en lugar de prepared statements, lo
 --     cual reduce throughput absoluto vs scripts oficiales. NO afecta la
---     comparacion relativa entre C1/C2/C3 (el overhead de format es
---     identico en las 3 configuraciones).
+--     comparacion relativa entre C1 y C2 (el overhead de format es
+--     identico en ambas configuraciones).
 --   * MAX(rental_id) y MAX(payment_id) se capturan UNA VEZ por thread al
 --     inicio. R1 es read-only, asi que no hay nuevos IDs durante la
 --     corrida -- no requiere refresco.
@@ -130,8 +127,6 @@ end
 
 function cleanup()
    -- No-op deliberado: el esquema Sakila/Pagila NO se debe dropear ni
-   -- truncar entre corridas. Para resetear el conteo de eventos
-   -- auditados en C3, ejecutar manualmente TRUNCATE audit_rental;
-   -- TRUNCATE audit_payment; (ver docs/cases.md §8).
+   -- truncar entre corridas.
    print("[cleanup] no-op (esquema Sakila/Pagila preservado por diseno)")
 end

@@ -15,7 +15,7 @@ documentadas en [`architecture.md`](architecture.md).
   especificaciones al reportar mediciones.
 - **Red:** las 4 VMs en la misma red interna o en bridge mode, con
   conectividad recíproca y acceso a internet para instalar paquetes.
-- **Imagen base:** Ubuntu Server 22.04 LTS (la versión exacta utilizada
+- **Imagen base:** Ubuntu Server 24.04 LTS (la versión exacta utilizada
   en la tesis se documenta en §2).
 
 ---
@@ -216,8 +216,9 @@ mariadb -u thesis -p sakila < mysql-sakila-insert-data-inflation.sql
 #       actor_host) Aplicar ALTER TABLE retroactivos
 mariadb -u thesis -p sakila < mysql-sakila-extend-audit.sql
 
-# 6.5. (Solo para configuracion C3) Crear los 6 triggers de auditoria
-#       aplicativa. NO ejecutar para mediciones C1 (baseline) o C2 (plugin).
+# 6.5. (COMPLEMENTARIO, NO medido) Triggers de auditoria aplicativa.
+#       NO cargar para las mediciones baseline (C1) ni plugin (C2): activos
+#       contaminarian el baseline. Ver architecture.md §1.
 mariadb -u thesis -p sakila < mysql-sakila-audit-triggers.sql
 
 # 6.6. Poblar tablas extendidas (sales_rollup_daily, customer_kpis,
@@ -237,8 +238,8 @@ mariadb -u thesis -p sakila -e "CALL sp_populate_extended_tables();"
 > `unset PGPASSWORD` al terminar.
 >
 > **Quién carga qué.** El esquema y el inflation se cargan como `thesis` (para
-> que `thesis` quede **dueño** de las tablas, necesario para sysbench y para
-> los triggers de C3). Los **datos** se cargan como `postgres` (superusuario)
+> que `thesis` quede **dueño** de las tablas, necesario para sysbench). Los
+> **datos** se cargan como `postgres` (superusuario)
 > porque el archivo hace `ALTER TABLE ... DISABLE TRIGGER ALL`, operación
 > reservada a superusuario; las filas entran igual en las tablas de `thesis`
 > sin cambiar la propiedad.
@@ -264,8 +265,9 @@ psql -h localhost -U thesis -d pagila -f postgres-sakila-insert-data-inflation.s
 # 7.4. (Solo si la VM se cargo antes de la migracion de actor_host)
 psql -h localhost -U thesis -d pagila -f postgres-sakila-extend-audit.sql
 
-# 7.5. (Solo para configuracion C3) Crear los 24 triggers de auditoria
-#       aplicativa. NO ejecutar para mediciones C1 o C2.
+# 7.5. (COMPLEMENTARIO, NO medido) Triggers de auditoria aplicativa.
+#       NO cargar para las mediciones baseline (C1) ni plugin (C2): activos
+#       contaminarian el baseline. Ver architecture.md §1.
 psql -h localhost -U thesis -d pagila -f postgres-sakila-audit-triggers.sql
 
 # 7.6. Poblar tablas extendidas
@@ -303,7 +305,7 @@ Si los conteos coinciden, el setup de datos está completo.
 
 ## 9. Verificación de mecanismos de auditoría
 
-### 9.1. Triggers aplicativos (solo si se ejecutó `*-audit-triggers.sql`)
+### 9.1. Triggers aplicativos (complementario — solo si se ejecutó `*-audit-triggers.sql`)
 
 ```sql
 -- MariaDB

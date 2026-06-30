@@ -5,8 +5,8 @@
 -- OBJETIVO: Workload OLTP mixto lectura/escritura sobre el esquema Sakila
 --           (MariaDB) o Pagila (PostgreSQL), con concurrencia controlada
 --           por --threads. Pensado para los casos R2 (OLTP mixto 80/20) y
---           R5 (carga sostenida 10 min) bajo cualquiera de las 3
---           configuraciones de auditoria.
+--           R5 (carga sostenida 10 min) bajo las 2 configuraciones de
+--           auditoria (baseline / plugin).
 --
 -- DECISION METODOLOGICA: ver header de oltp_read_only_sakila.lua.
 --
@@ -25,13 +25,9 @@
 --   - C1 (baseline): 0
 --   - C2 (plugin): 18 entradas en server_audit.log / postgresql.log
 --     (cada query loguea events=QUERY,TABLE)
---   - C3 (triggers): 4 INSERTs en audit_*:
---       * 2 en audit_rental (de los 2 UPDATE rental, via trg_audit_rental_update)
---       * 2 en audit_payment (de los 2 UPDATE payment, via trg_audit_payment_update)
---     En PostgreSQL la auditoria de payment se reparte entre payment parent
---     y particiones hijas segun donde resida fisicamente cada fila; el
---     conteo en audit_payment es identico (cobertura simetrica documentada
---     en docs/architecture.md §3).
+--   (Implementacion complementaria de triggers, NO medida: si estuviera
+--    activa, los 4 UPDATE generarian 4 INSERTs en audit_*. No se carga
+--    durante las mediciones. Ver docs/architecture.md §1.)
 --
 -- USO: identico a oltp_read_only_sakila.lua. Para R5 usar --time=600.
 --
@@ -40,9 +36,9 @@
 --   payment incrementa amount en 0.01. Sobre corridas largas (R5 con
 --   ~5K txn/seg durante 10 min) los datos se polucionan acumulativamente:
 --   en promedio cada payment_id recibe ~23 incrementos, su amount sube
---   ~$0.23. Entre corridas de R5 (cambio de configuracion C1->C2->C3)
---   se debe RESTAURAR snapshot de la VM o revertir los cambios para
---   que las 3 mediciones partan del mismo estado. Ver docs/cases.md §2.
+--   ~$0.23. Entre repeticiones de R5 en una misma VM se debe RESTAURAR
+--   snapshot de la VM o revertir los cambios para que cada corrida parta
+--   del mismo estado. Ver docs/cases.md §2.
 -- =============================================================================
 
 sysbench.cmdline.options = {
@@ -100,7 +96,7 @@ function event()
       "SELECT DISTINCT staff_id FROM payment WHERE payment_id BETWEEN %d AND %d",
       pid, pid + range_size - 1))
 
-   -- ---- ESCRITURAS (4 ops, dispara 4 triggers de auditoria bajo C3) ----
+   -- ---- ESCRITURAS (4 ops de escritura; el plugin C2 las audita) ----
 
    -- 2 UPDATE rental sobre rental_ids aleatorios distintos
    local u_rid_1 = sysbench.rand.uniform(1, max_rental_id)

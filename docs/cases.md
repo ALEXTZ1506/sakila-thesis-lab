@@ -1,67 +1,26 @@
 # Casos experimentales R1–R5
 
 Este documento da los comandos exactos para reproducir cada caso de
-rendimiento en cada una de las 3 configuraciones de auditoría
-(C1 baseline / C2 plugin / C3 triggers aplicativos). Asume que el setup
-descrito en [`setup.md`](setup.md) está completo y que las decisiones
-metodológicas de [`architecture.md`](architecture.md) son aceptadas.
+rendimiento en cada una de las 2 configuraciones de auditoría
+(C1 baseline / C2 plugin). Asume que el setup descrito en
+[`setup.md`](setup.md) está completo y que las decisiones metodológicas de
+[`architecture.md`](architecture.md) son aceptadas.
 
 ---
 
-## 1. Las 3 configuraciones de auditoría
+## 1. Las 2 configuraciones de auditoría
 
-| Configuración | VM (MariaDB / PostgreSQL) | Plugin | Triggers aplicativos |
-|---|---|---|---|
-| **C1 — Baseline** | TUS-MariaDB / TUS-PostgreSQL | OFF | OFF |
-| **C2 — Plugin nativo** | TUS-MariaDB-Audit / TUS-PostgreSQL-Audit | ON | OFF |
-| **C3 — Triggers aplicativos** | TUS-MariaDB / TUS-PostgreSQL | OFF | ON |
+| Configuración | VM (MariaDB / PostgreSQL) | Plugin |
+|---|---|---|
+| **C1 — Baseline** | TUS-MariaDB / TUS-PostgreSQL | OFF |
+| **C2 — Plugin nativo** | TUS-MariaDB-Audit / TUS-PostgreSQL-Audit | ON |
 
-C1 y C3 conviven en la misma VM (la sin-plugin). La transición entre ellos:
+El mapeo es 1:1 — cada VM es exactamente una configuración. No hay triggers
+que cargar ni transiciones: cada caso R1–R5 se corre una vez en cada VM.
 
-```bash
-# C1 -> C3 (en TUS-MariaDB)
-mariadb -u thesis -p sakila < mysql-sakila-db/mysql-sakila-audit-triggers.sql
-
-# C3 -> C1 (en TUS-MariaDB)
-mariadb -u thesis -p sakila <<'EOF'
-DROP TRIGGER IF EXISTS trg_audit_rental_insert;
-DROP TRIGGER IF EXISTS trg_audit_rental_update;
-DROP TRIGGER IF EXISTS trg_audit_rental_delete;
-DROP TRIGGER IF EXISTS trg_audit_payment_insert;
-DROP TRIGGER IF EXISTS trg_audit_payment_update;
-DROP TRIGGER IF EXISTS trg_audit_payment_delete;
-TRUNCATE audit_rental;
-TRUNCATE audit_payment;
-EOF
-```
-
-```bash
-# C1 -> C3 (en TUS-PostgreSQL)
-psql -U thesis -d pagila -f postgres-sakila-db/postgres-sakila-audit-triggers.sql
-
-# C3 -> C1 (en TUS-PostgreSQL)
-psql -U thesis -d pagila <<'EOF'
-DROP TRIGGER IF EXISTS trg_audit_rental_insert  ON rental;
-DROP TRIGGER IF EXISTS trg_audit_rental_update  ON rental;
-DROP TRIGGER IF EXISTS trg_audit_rental_delete  ON rental;
-DROP TRIGGER IF EXISTS trg_audit_payment_insert ON payment;
-DROP TRIGGER IF EXISTS trg_audit_payment_update ON payment;
-DROP TRIGGER IF EXISTS trg_audit_payment_delete ON payment;
--- Tambien sobre las 6 particiones hijas:
-DO $$ DECLARE p TEXT;
-BEGIN
-  FOREACH p IN ARRAY ARRAY['payment_p2007_01','payment_p2007_02','payment_p2007_03',
-                           'payment_p2007_04','payment_p2007_05','payment_p2007_06'] LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_payment_insert ON %I', p);
-    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_payment_update ON %I', p);
-    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_payment_delete ON %I', p);
-  END LOOP;
-END $$;
-DROP FUNCTION IF EXISTS fn_audit_row();
-TRUNCATE audit_rental;
-TRUNCATE audit_payment;
-EOF
-```
+> Los triggers de auditoría aplicativa (`*-audit-triggers.sql`) son una
+> implementación complementaria y **no se cargan durante las mediciones**
+> (contaminarían el baseline). Ver [`architecture.md`](architecture.md) §1.
 
 ---
 
@@ -75,11 +34,11 @@ Para cada (caso R, motor, configuración):
    revertir los cambios DML acumulados de la corrida anterior. R3
    acumula nuevos rentals/payments en fechas 2026+; R5 incrementa
    `payment.amount` y reescribe `rental.return_date` aleatoriamente.
-   Sin este reset, las 3 mediciones por configuración partirían de
-   estados distintos. R1, R2 y R4 también modifican datos pero el
+   Sin este reset, las repeticiones (y la comparación entre VMs) partirían
+   de estados distintos. R1, R2 y R4 también modifican datos pero el
    impacto es marginal en corridas cortas (60 seg).
-3. **Capturar estado inicial.** Conteos de `audit_rental` / `audit_payment`,
-   tamaño del log del plugin, plan de la query si aplica (ver §8).
+3. **Capturar estado inicial.** Tamaño del log del plugin (C2) y, si aplica,
+   plan de la query (ver §8).
 4. **Ejecutar el caso.** Comando exacto en las secciones §3–§7.
 5. **Capturar estado final.** Mismas métricas que en (3).
 6. **Repetir.** N corridas por caso (la tesis sugiere N≥5 para
@@ -95,10 +54,9 @@ Para cada (caso R, motor, configuración):
 **Herramienta:** sysbench con script Lua personalizado
 [`benchmark-scripts/oltp_read_only_sakila.lua`](../benchmark-scripts/oltp_read_only_sakila.lua).
 Apunta directamente a las tablas `rental` y `payment` del esquema
-Sakila (MariaDB) o Pagila (PostgreSQL) para que las mediciones bajo C3
-(triggers aplicativos) reflejen el workload sobre tablas auditadas.
-Decisión metodológica completa en
-[`architecture.md`](architecture.md) §5.
+Sakila (MariaDB) o Pagila (PostgreSQL) para que el plugin (C2) audite
+el workload sobre las tablas reales del dominio. Decisión metodológica
+completa en [`architecture.md`](architecture.md) §5.
 
 **Verificación inicial (opcional, una sola vez por motor):**
 
@@ -138,19 +96,12 @@ sysbench benchmark-scripts/oltp_read_only_sakila.lua \
 ```
 
 **Sin limpieza:** el esquema Sakila/Pagila NO se dropea ni se trunca
-entre corridas (el `cleanup` del script es no-op por diseño). Para
-resetear el conteo de eventos auditados en C3, ejecutar manualmente
-`TRUNCATE audit_rental; TRUNCATE audit_payment;` entre cambios de
-configuración.
+entre corridas (el `cleanup` del script es no-op por diseño).
 
-> **Finding esperado R1+C3 (no es un gap, es un resultado):** la
-> métrica R1+C3 será **prácticamente idéntica a R1+C1** porque los
-> triggers `AFTER INSERT/UPDATE/DELETE` no se disparan en SELECTs.
-> R1 es read-only, por lo tanto no hay eventos auditables a nivel
-> aplicativo. Esto se reporta en la tesis como **evidencia cualitativa
-> de una limitación intrínseca del mecanismo trigger-based**: a
-> diferencia de los plugins (que SÍ capturan SELECTs), la auditoría
-> aplicativa no puede instrumentar operaciones de lectura.
+> **Nota R1 + C2:** aunque R1 es solo lectura, el plugin **sí** audita
+> SELECTs cuando se configura con `server_audit_events=QUERY` /
+> `pgaudit.log='all'`, así que R1+C2 puede mostrar overhead frente al
+> baseline. Es justamente lo que mide este caso.
 
 ---
 
@@ -160,7 +111,7 @@ configuración.
 [`benchmark-scripts/oltp_read_write_sakila.lua`](../benchmark-scripts/oltp_read_write_sakila.lua).
 Patrón por transacción: 14 lecturas + 4 escrituras = 18 ops/txn con
 ratio aproximado 78/22. Las 4 escrituras (2 UPDATE rental + 2 UPDATE
-payment) disparan 4 triggers de auditoría aplicativa bajo C3.
+payment) son operaciones de escritura que el plugin (C2) audita.
 
 ```bash
 sysbench benchmark-scripts/oltp_read_write_sakila.lua \
@@ -337,9 +288,12 @@ sudo grep -c 'AUDIT:' /var/log/postgresql/postgresql-16-main.log
 sudo grep -c 'AUDIT:' /var/log/postgresql/postgresql-16-main.log
 ```
 
-### 8.3. Crecimiento de tablas audit_rental / audit_payment
+### 8.3. (Opcional) Crecimiento de audit_rental / audit_payment
 
-Solo aplica en C3 (triggers aplicativos):
+**No es parte de la comparación medida** (baseline vs plugin). Solo aplica si
+se ejecuta la implementación complementaria de triggers (ver
+[`architecture.md`](architecture.md) §1); la auditoría del plugin (C2) se mide
+con su log (§8.2), no con estas tablas.
 
 ```sql
 SELECT COUNT(*) AS audit_rental_filas FROM audit_rental;

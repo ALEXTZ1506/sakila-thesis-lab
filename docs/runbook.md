@@ -15,7 +15,7 @@ aquí, está en [`cases.md`](cases.md) §3–§7.
 Checklist condensado de [`setup.md`](setup.md):
 
 1. **4 VMs levantadas** con las versiones de [`setup.md`](setup.md) §2
-   (MariaDB 11.4, PostgreSQL 16, Ubuntu 22.04).
+   (MariaDB 11.4, PostgreSQL 16, Ubuntu 24.04).
 2. **Datos cargados e inflados** → verificar los conteos de
    [`setup.md`](setup.md) §8: `rental = 513,408`, `payment = 513,568`.
    Si no cuadran, no continuar.
@@ -38,7 +38,7 @@ Checklist condensado de [`setup.md`](setup.md):
 
 ## 2. La matriz: qué se corre y cuántas veces
 
-La tesis define **30 celdas** = 5 casos × 3 configuraciones × 2 motores
+La tesis define **20 celdas** = 5 casos × 2 configuraciones × 2 motores
 ([`architecture.md`](architecture.md) §1). Una celda no es una corrida:
 
 - **Cada celda se repite N≥5 veces** para estabilizar p50/p95
@@ -59,7 +59,7 @@ Volumen estimado por (motor × configuración), con N=5:
 | R4 (Q01 + Q02) | 2 | 10 |
 | R5 | 1 | 5 |
 
-≈ 50 corridas por (motor × config) × 6 combinaciones ≈ **300 corridas**. Si
+≈ 50 corridas por (motor × config) × 4 combinaciones ≈ **200 corridas**. Si
 el tiempo aprieta, bajar N a 3 en R1 (el que más multiplica) y mantener N=5
 en R2/R5. **Documentar el N usado** en la bitácora.
 
@@ -91,7 +91,7 @@ Dos sesiones, y lo importante es *dónde* corre cada una:
 
 > **htop es evidencia cualitativa/contextual, no métrica primaria.** Los
 > números duros salen de sysbench y de los deltas de [`cases.md`](cases.md)
-> §8. htop sirve para narrar saturación ("R5+C3 saturó CPU al ~95% vs ~70%
+> §8. htop sirve para narrar saturación ("R5+C2 saturó CPU al ~95% vs ~70%
 > en C1") y es más útil en R5. Basta capturarlo en una corrida representativa
 > por celda, no en las ~300.
 
@@ -99,25 +99,17 @@ Dos sesiones, y lo importante es *dónde* corre cada una:
 
 ## 4. Orden recomendado
 
-**C1 (baseline, sin auditoría) antes que C3**, por mecánica de transición:
-
-- C1 y C3 **viven en la misma VM** (la sin-plugin). C1 → C3 = solo *cargar*
-  los triggers (1 comando, aditivo). C3 → C1 = *dropear* 6/24 triggers +
-  truncar `audit_*` ([`cases.md`](cases.md) §1). Hacer C1 primero evita el
-  camino sucio.
-- C2 está en su **propia VM** (`-Audit`), es independiente; se intercala
-  cuando convenga.
-
-Trabajando una VM a la vez:
+Cada VM es una sola configuración (C1 baseline o C2 plugin), así que no hay
+triggers que cargar ni transiciones. Puedes iterar **por caso** (R1 en las 4
+VMs, luego R2…) o **por VM** (todos los casos en una VM antes de pasar); el
+dato sale igual. Las 4 VMs:
 
 ```
-TUS-PostgreSQL        → todas las celdas C1 → cargar triggers → celdas C3
-TUS-PostgreSQL-Audit  → todas las celdas C2
-TUS-MariaDB           → todas las celdas C1 → cargar triggers → celdas C3
-TUS-MariaDB-Audit     → todas las celdas C2
+TUS-PostgreSQL        (C1)   TUS-PostgreSQL-Audit  (C2)
+TUS-MariaDB           (C1)   TUS-MariaDB-Audit     (C2)
 ```
 
-Dentro de cada configuración, de menos a más destructivo (minimiza
+Dentro de cada VM, corre los casos de menos a más destructivo (minimiza
 restauraciones de snapshot):
 
 ```
@@ -155,28 +147,27 @@ Para cada (caso, motor, config), repetir N veces ([`cases.md`](cases.md) §2):
 |---|---|---|
 | Throughput + latencia p50/p95 | siempre | output de sysbench; para R3/R4 usar `time` |
 | Delta del log del plugin | **solo C2** | `wc -l` / `tail` del log antes y después → líneas nuevas = eventos auditados |
-| Delta de filas + tamaño en `audit_*` | **solo C3** | `COUNT(*)` y tamaño físico de `audit_rental` / `audit_payment` antes y después |
 | Plan EXPLAIN | R4, ≥1 vez por config | `EXPLAIN FORMAT=JSON` / `EXPLAIN (ANALYZE, BUFFERS)` |
 | htop (CPU/RAM) | opcional, 1 corrida representativa | screenshot de la Sesión 2 durante el pico |
 
-El comparativo central de la tesis cruza el **delta de eventos auditados**
-(filas en C3 vs líneas de log en C2 vs 0 en C1) contra el **costo en
-throughput/latencia** de cada mecanismo.
+El comparativo central de la tesis cruza el **costo en throughput/latencia**
+de habilitar el plugin (C2) contra el baseline (C1), por motor — más el
+**delta de eventos auditados** (líneas nuevas en el log del plugin).
 
-> **Hallazgo esperado, no bug:** R1+C3 ≈ R1+C1 porque los triggers `AFTER`
-> no disparan en SELECTs ([`cases.md`](cases.md) §3,
-> [`architecture.md`](architecture.md) §5). Es resultado reportable.
+> **Nota:** aun en R1 (solo lectura) el plugin puede añadir overhead, porque
+> audita SELECTs cuando se configura con `server_audit_events=QUERY` /
+> `pgaudit.log='all'` ([`cases.md`](cases.md) §3,
+> [`architecture.md`](architecture.md) §5).
 
 ---
 
 ## 7. Punto de partida sugerido
 
-Empezar por **TUS-PostgreSQL en C1** (baseline, sin plugin, sin triggers):
-es la celda más simple (cero auditoría) y valida que el setup y la
-conectividad funcionan antes de añadir mecanismos. Secuencia inicial:
+Empezar por **TUS-PostgreSQL** (C1 baseline, sin plugin): es la celda más
+simple (cero auditoría) y valida que el setup y la conectividad funcionan
+antes de añadir el plugin. Secuencia inicial:
 
 1. Verificar instalación/versiones y conectividad (§1).
 2. Tomar el snapshot golden de TUS-PostgreSQL.
-3. Correr R1 → R2 → R4 → R3 → R5 en C1, N≥5 cada uno (§4, §5).
-4. Cargar triggers ([`cases.md`](cases.md) §1) → repetir como C3.
-5. Pasar a TUS-PostgreSQL-Audit para C2, luego a las VMs MariaDB.
+3. Correr R1 → R2 → R4 → R3 → R5, N≥5 cada uno (§4, §5).
+4. Pasar a TUS-PostgreSQL-Audit (C2), luego a las VMs MariaDB.

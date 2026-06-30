@@ -7,45 +7,43 @@ no es deducible leyendo solo el código.
 
 ---
 
-## 1. Decisión metodológica central: triple comparación
+## 1. Decisión metodológica central: baseline vs plugin
 
-La tesis no contrasta dos sino **tres** configuraciones de auditoría por motor:
+La tesis contrasta **dos** configuraciones de auditoría por motor, en línea
+con sus objetivos (medir el impacto de habilitar el plugin oficial):
 
-| Configuración | Plugin del motor | Triggers aplicativos | Qué mide |
-|---|---|---|---|
-| **C1 — Baseline** | OFF | OFF | Costo nativo del workload, sin overhead de auditoría |
-| **C2 — Plugin nativo** | ON  | OFF | Overhead del mecanismo oficial del motor (server_audit / pgAudit) |
-| **C3 — Triggers aplicativos** | OFF | ON  | Overhead del enfoque tabla-de-auditoría custom |
+| Configuración | Plugin del motor | Qué mide |
+|---|---|---|
+| **C1 — Baseline** | OFF | Costo nativo del workload, sin overhead de auditoría |
+| **C2 — Plugin nativo** | ON | Overhead del mecanismo oficial del motor (server_audit / pgAudit) |
 
 Cada caso R1–R5 se ejecuta una vez en cada configuración, por motor.
-Total: 5 casos × 3 configuraciones × 2 motores = **30 mediciones**.
+Total: 5 casos × 2 configuraciones × 2 motores = **20 mediciones**.
 
-### Cómo se logran las 3 configuraciones a partir de 4 VMs
+### Cómo mapean las 4 VMs a las 2 configuraciones
 
-Las VMs cubren la dimensión "plugin sí/no". La dimensión "triggers sí/no"
-se controla cargando o no el archivo `*-audit-triggers.sql`:
+El mapeo es 1:1 — cada VM es exactamente una configuración, sin triggers que
+cargar ni transiciones entre estados:
 
-| VM | Cargar `*-audit-triggers.sql` | Configuración resultante |
+| VM | Plugin | Configuración |
 |---|---|---|
-| TUS-MariaDB | NO | C1 (baseline MariaDB) |
-| TUS-MariaDB | SÍ | C3 (triggers MariaDB) |
-| TUS-MariaDB-Audit | NO | C2 (plugin MariaDB) |
-| TUS-PostgreSQL | NO | C1 (baseline PostgreSQL) |
-| TUS-PostgreSQL | SÍ | C3 (triggers PostgreSQL) |
-| TUS-PostgreSQL-Audit | NO | C2 (plugin PostgreSQL) |
+| TUS-MariaDB | OFF | C1 (baseline MariaDB) |
+| TUS-MariaDB-Audit | ON | C2 (plugin MariaDB) |
+| TUS-PostgreSQL | OFF | C1 (baseline PostgreSQL) |
+| TUS-PostgreSQL-Audit | ON | C2 (plugin PostgreSQL) |
 
-C1 y C3 conviven en la misma VM. La transición C1 → C3 se hace cargando
-los triggers; la transición C3 → C1 se hace haciendo `DROP TRIGGER` de los
-6 triggers de auditoría aplicativa (24 en PostgreSQL contando particiones
-— ver §3). Procedimiento detallado en [`cases.md`](cases.md).
+Cada caso R1–R5 se corre una vez en cada una de las 4 VMs.
 
-### Por qué esta decisión
+### Triggers de auditoría aplicativa (implementación complementaria, NO medida)
 
-La afirmación textual de la tesis es "triggers de auditoría propios,
-complementarios a los plugins, que permiten contrastar la auditoría a nivel
-de motor con una auditoría implementada a nivel aplicativo". Sin C3, esa
-afirmación es falsa. Con C3, la tesis adquiere un diferenciador genuino
-respecto a comparativos previos que solo contrastan baseline contra plugin.
+El repositorio incluye triggers de auditoría a nivel aplicativo
+(`audit_rental` / `audit_payment`, en los archivos `*-audit-triggers.sql`)
+como implementación complementaria del esquema. **No forman parte de la
+comparación medida:** los objetivos de la tesis evalúan los plugins oficiales
+(`MariaDB Audit Plugin` y `pgAudit`). Además **no deben cargarse durante las
+mediciones** — si estuvieran activos durante el baseline (C1) añadirían
+overhead de escritura y contaminarían la línea base. Se conservan como
+artefacto del laboratorio y posible trabajo futuro.
 
 ---
 
@@ -72,15 +70,20 @@ siguientes decisiones de simetría:
   `ROW_COUNT()`; PostgreSQL usa `INSERT ... ON CONFLICT DO NOTHING` +
   `RETURNING ... INTO`. Ambos cuentan colisiones en `v_skipped` y reportan
   al final.
-- **Auditoría aplicativa con cobertura equivalente:** ver §3.
+- **Triggers de auditoría aplicativa (complementarios, no medidos):**
+  cobertura equivalente entre motores; ver §3.
 
 ---
 
 ## 3. ¿Por qué la cantidad de triggers de auditoría difiere entre motores?
 
-Esta es la pregunta de simetría más probable del tribunal. **No es una
-asimetría metodológica: es una asimetría estructural del esquema Pagila
-que se compensa con triggers adicionales para preservar cobertura equivalente.**
+> **Nota:** los triggers de auditoría aplicativa son una implementación
+> complementaria, **no parte de la comparación medida** (ver §1). Esta sección
+> documenta una asimetría del artefacto, útil solo si se inspeccionan los
+> scripts `*-audit-triggers.sql`.
+
+Es una asimetría **estructural del esquema Pagila** que se compensa con
+triggers adicionales para preservar cobertura equivalente entre motores.
 
 ### El conteo exacto
 
@@ -197,19 +200,16 @@ Restricciones del laboratorio que el lector debe conocer:
   SQL; la concurrencia se obtiene con `sysbench --threads=N` ejecutando
   los scripts Lua personalizados en
   [`../benchmark-scripts/`](../benchmark-scripts/), que apuntan
-  directamente a `rental` y `payment` del esquema Sakila/Pagila para
-  preservar la cobertura de la configuración C3 (triggers aplicativos).
+  directamente a `rental` y `payment` del esquema Sakila/Pagila para que
+  el plugin (C2) audite operaciones reales sobre las tablas del dominio.
   Los scripts oficiales de sysbench (`/usr/share/sysbench/oltp_*.lua`)
-  operan sobre el esquema `sbtest`, fuera del alcance de los triggers
-  aplicativos, por lo que NO se usan en este experimento. Ver §6.
-- **R1+C3 produce métricas equivalentes a R1+C1:** los triggers
-  `AFTER INSERT/UPDATE/DELETE` no se disparan en operaciones de
-  lectura. R1 es read-only, por lo tanto la configuración C3 no
-  genera eventos auditables en R1 y sus métricas son prácticamente
-  idénticas a C1 (baseline). Esto se reporta en la tesis como
-  **evidencia cualitativa de una limitación intrínseca del mecanismo
-  trigger-based** (los plugins, en cambio, SÍ capturan SELECTs cuando
-  se configuran con `server_audit_events=QUERY` o `pgaudit.log='all'`).
+  operan sobre el esquema `sbtest`, ajeno al dominio Sakila/Pagila, por lo
+  que NO se usan en este experimento. Ver §6.
+- **R1 (read-only) sí genera auditoría bajo C2:** el plugin SÍ captura
+  SELECTs cuando se configura con `server_audit_events=QUERY` o
+  `pgaudit.log='all'`. Por eso R1+C2 puede mostrar overhead aun siendo un
+  workload de solo lectura (a diferencia de un enfoque basado en triggers
+  `AFTER`, que no se dispararía en lecturas).
 - **Q03 (FullText_IO) fuera de R1–R5:** No mapea directamente a ningún
   caso oficial; se conserva como prueba complementaria opcional del
   subsistema full-text. La tesis la menciona como evidencia adicional.
@@ -237,10 +237,10 @@ Para preempt-ar la pregunta "¿por qué no hay un script para sysbench?":
 - **sysbench** es dependencia externa (instalada via `apt`), pero el
   repositorio **sí incluye** scripts Lua personalizados en
   [`benchmark-scripts/`](../benchmark-scripts/) que se ejecutan CON
-  sysbench. Estos scripts son necesarios para preservar la cobertura
-  C3 sobre Sakila/Pagila (los scripts oficiales operan sobre
-  `sbtest`). No se reimplementa el motor de concurrencia de sysbench;
-  se aprovecha vía scripts custom.
+  sysbench. Estos scripts operan sobre las tablas reales de Sakila/Pagila
+  (los oficiales usan `sbtest`), para que el plugin audite el dominio real.
+  No se reimplementa el motor de concurrencia de sysbench; se aprovecha vía
+  scripts custom.
 - **Scripts de los casos de seguridad S1–S5** se diseñarán en una fase
   posterior; quedaron fuera del scope del primer entregable de código.
 - **Resultados (CSV, gráficos, hojas de cálculo)** se generan fuera del

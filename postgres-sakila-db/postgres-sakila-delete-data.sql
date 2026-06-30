@@ -8,7 +8,7 @@
 --   * TRUNCATE sobre `payment` (sin ONLY) vacia tambien sus particiones hijas
 --     payment_p2007_01..06;
 --   * TRUNCATE NO dispara los triggers de fila, asi que las tablas audit_*
---     no se repueblan aunque la configuracion C3 este activa;
+--     no se repueblan aunque los triggers complementarios esten activos;
 --   * RESTART IDENTITY reinicia las secuencias a su valor inicial.
 --
 -- Cubre tablas canonicas de Sakila + extendidas de la tesis (audit_rental,
