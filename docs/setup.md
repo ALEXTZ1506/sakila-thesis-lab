@@ -24,14 +24,14 @@ documentadas en [`architecture.md`](architecture.md).
 
 | Componente | Versión | Notas |
 |---|---|---|
-| Ubuntu Server | 22.04.x LTS | x86_64 |
+| Ubuntu Server | 24.04.x LTS | x86_64 (lab validado en 24.04 LTS) |
 | MariaDB | 11.4.x LTS | Repositorio oficial de MariaDB |
-| PostgreSQL | 16.x | Repositorio PGDG (apt.postgresql.org) |
+| PostgreSQL | 16.x | Nativo en Ubuntu 24.04 (apt); PGDG solo para otra versión |
 | MariaDB Audit Plugin | empacado con MariaDB 11.4 | `server_audit.so` |
 | pgAudit | 16.0+ (paquete `postgresql-16-pgaudit`) | Repositorio PGDG |
 | sysbench | 1.0.20 | Paquete oficial de Ubuntu (`apt install sysbench`) |
-| sqlmap | versión empacada en Ubuntu 22.04 | Para los casos S1–S5 (fase futura) |
-| hydra | versión empacada en Ubuntu 22.04 | Para los casos S1–S5 (fase futura) |
+| sqlmap | versión empacada en Ubuntu 24.04 | Para los casos S1–S5 (fase futura) |
+| hydra | versión empacada en Ubuntu 24.04 | Para los casos S1–S5 (fase futura) |
 
 > Al reportar resultados, registre las versiones puntuales (`mariadb --version`,
 > `psql --version`, `sysbench --version`) en la bitácora de cada VM.
@@ -94,6 +94,13 @@ psql --version    # Espera "psql (PostgreSQL) 16.x"
 sudo systemctl status postgresql
 ```
 
+> **Ubuntu 24.04:** PostgreSQL 16 es el paquete nativo del repositorio de
+> Ubuntu, así que puede **omitir el paso 1 (PGDG)** e instalar directamente
+> `sudo apt install -y postgresql-16 postgresql-client-16`. PGDG solo hace
+> falta para una versión distinta a la del repositorio. `pgcrypto` (para Q03)
+> viene incluido en `postgresql-16`; `postgresql-contrib-16` es un paquete de
+> transición vacío en versiones recientes.
+
 Crear el usuario y la base de datos:
 
 ```bash
@@ -105,6 +112,28 @@ EOF
 
 > **Nota:** PostgreSQL no crea la base de datos automáticamente. El nombre
 > `pagila` es convención; ajústelo si su VM usa otro nombre.
+
+### 4.1. Acceso remoto (para sysbench y clientes en la red del laboratorio)
+
+Por defecto PostgreSQL solo escucha en `127.0.0.1`; un cliente externo
+(sysbench, psql remoto) no podrá conectar. Para habilitar acceso desde la
+red interna del laboratorio:
+
+```bash
+# Escuchar en todas las interfaces
+sudo sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" \
+  /etc/postgresql/16/main/postgresql.conf
+
+# Permitir al rol thesis desde la subred del lab (ajuste el CIDR a su red)
+echo "host    pagila    thesis    192.168.1.0/24    scram-sha-256" \
+  | sudo tee -a /etc/postgresql/16/main/pg_hba.conf
+
+sudo systemctl restart postgresql
+sudo ss -tlnp | grep 5432        # debe mostrar 0.0.0.0:5432, no 127.0.0.1
+```
+
+Verifique desde el cliente: `psql -h <IP-VM> -U thesis -d pagila -c "SELECT 1;"`.
+(El análogo en MariaDB es `bind-address = 0.0.0.0` en el `.cnf`.)
 
 ---
 
@@ -201,30 +230,48 @@ mariadb -u thesis -p sakila -e "CALL sp_populate_extended_tables();"
 
 ## 7. Carga de datos en PostgreSQL
 
+> **Método de conexión (importante).** El usuario del sistema operativo no es
+> `thesis`, así que la autenticación `peer` por socket falla; hay que conectar
+> por TCP con `-h localhost` (auth `scram`, pide contraseña). Para no repetirla
+> en cada archivo: `export PGPASSWORD='<placeholder-pwd>'` durante la carga y
+> `unset PGPASSWORD` al terminar.
+>
+> **Quién carga qué.** El esquema y el inflation se cargan como `thesis` (para
+> que `thesis` quede **dueño** de las tablas, necesario para sysbench y para
+> los triggers de C3). Los **datos** se cargan como `postgres` (superusuario)
+> porque el archivo hace `ALTER TABLE ... DISABLE TRIGGER ALL`, operación
+> reservada a superusuario; las filas entran igual en las tablas de `thesis`
+> sin cambiar la propiedad.
+
 ```bash
 cd postgres-sakila-db
+export PGPASSWORD='<placeholder-pwd>'
 
-# 7.1. Esquema base
-psql -U thesis -d pagila -f postgres-sakila-schema.sql
+# 7.1. Esquema base (como thesis). Veras ~54 errores "must be able to SET ROLE
+#      postgres": son los ALTER ... OWNER TO postgres del dump, INOFENSIVOS —
+#      cada CREATE si se aplica y el objeto queda propiedad de thesis.
+psql -h localhost -U thesis -d pagila -f postgres-sakila-schema.sql
 
-# 7.2. Datos canonicos. Hay dos variantes:
-#      (a) postgres-sakila-insert-data.sql            (formato INSERT, 7.8 MB)
-#      (b) postgres-sakila-insert-data-using-copy.sql (formato COPY, 2.6 MB)
-#      Se recomienda (b) por ser 10-100x mas rapida.
-psql -U thesis -d pagila -f postgres-sakila-insert-data-using-copy.sql
+# 7.2. Datos canonicos COMO POSTGRES (superusuario; requiere DISABLE TRIGGER ALL).
+#      Hay dos variantes: (a) postgres-sakila-insert-data.sql (INSERT, 7.8 MB);
+#      (b) postgres-sakila-insert-data-using-copy.sql (COPY, 2.6 MB, 10-100x mas
+#      rapida). Se recomienda (b).
+sudo -u postgres psql -d pagila -f postgres-sakila-insert-data-using-copy.sql
 
-# 7.3. Inflation a ~513K rentals y ~513K payments
-psql -U thesis -d pagila -f postgres-sakila-insert-data-inflation.sql
+# 7.3. Inflation a ~513K rentals y ~513K payments (como thesis)
+psql -h localhost -U thesis -d pagila -f postgres-sakila-insert-data-inflation.sql
 
 # 7.4. (Solo si la VM se cargo antes de la migracion de actor_host)
-psql -U thesis -d pagila -f postgres-sakila-extend-audit.sql
+psql -h localhost -U thesis -d pagila -f postgres-sakila-extend-audit.sql
 
 # 7.5. (Solo para configuracion C3) Crear los 24 triggers de auditoria
 #       aplicativa. NO ejecutar para mediciones C1 o C2.
-psql -U thesis -d pagila -f postgres-sakila-audit-triggers.sql
+psql -h localhost -U thesis -d pagila -f postgres-sakila-audit-triggers.sql
 
 # 7.6. Poblar tablas extendidas
-psql -U thesis -d pagila -c "CALL sp_populate_extended_tables();"
+psql -h localhost -U thesis -d pagila -c "CALL sp_populate_extended_tables();"
+
+unset PGPASSWORD
 ```
 
 ---

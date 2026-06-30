@@ -140,6 +140,8 @@ Para cada (caso, motor, config), repetir N veces ([`cases.md`](cases.md) §2):
    `DELETE ... WHERE fecha > '2012-12-31'` de [`cases.md`](cases.md) §5.
 3. **Capturar estado inicial** (métricas de §6).
 4. **Ejecutar el caso:** comando exacto en [`cases.md`](cases.md) §3–§7.
+   (Corre `sysbench` desde la **raíz del repo**: las rutas a `benchmark-scripts/`
+   son relativas, o usa la ruta absoluta al `.lua`.)
 5. **Capturar estado final** (mismas métricas → el *delta* es el resultado
    de auditoría).
 6. **Guardar:** `results/<R>_<config>_<motor>_runK.log` (carpeta local, está
