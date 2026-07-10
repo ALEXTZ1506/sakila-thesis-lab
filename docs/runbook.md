@@ -31,8 +31,9 @@ Checklist condensado de [`setup.md`](setup.md):
    - Prueba: `mariadb -h <IP> -u thesis -p -e "SELECT 1;"` y
      `psql -h <IP> -U thesis -d pagila -c "SELECT 1;"` desde el cliente.
 6. **Snapshot "golden" de cada VM en VirtualBox**, tomado *después* de cargar
-   datos y *antes* de la primera corrida. Es el botón de reset para R3 y R5
-   (ver §5, paso 2).
+   datos y *antes* de la primera corrida. Es un **seguro de respaldo** (permite
+   restaurar toda la VM si algo se corrompe), no el reset rutinario entre
+   corridas — el reset de R3 se hace por `rental_id` en la propia BD (ver §5).
 
 ---
 
@@ -114,11 +115,14 @@ restauraciones de snapshot):
 
 ```
 R1 → R2 → R4   (lecturas/escrituras leves: sin reset de datos entre ellos)
-R3 → R5        (ensucian datos fuerte: restaurar snapshot DESPUÉS de cada uno)
+R3             (inserta filas: reset por rental_id entre corridas, ver §5)
+R5             (carga sostenida: NO requiere reset — solo SELECT/UPDATE)
 ```
 
-R3 siembra filas con fechas 2026+ y R5 derrama `amount` / `return_date`
-([`cases.md`](cases.md) §2, paso 2); por eso van al final, antes de un restore.
+R3 inserta filas nuevas → entre corridas se revierten **por `rental_id`** (no
+por fecha; la inflación abarca 2005–2037), ver [`cases.md`](cases.md) §5. R5
+solo hace SELECT/UPDATE: los conteos no cambian, así que no requiere reset de
+datos. Ninguno necesita restaurar snapshot como paso rutinario.
 
 ---
 
@@ -128,8 +132,9 @@ Para cada (caso, motor, config), repetir N veces ([`cases.md`](cases.md) §2):
 
 1. **Cache frío reproducible:** `sudo systemctl restart mariadb` /
    `postgresql`; esperar a que acepte conexiones ([`setup.md`](setup.md) §11).
-2. **Reset de datos — solo R3 y R5:** restaurar el snapshot golden, o el
-   `DELETE ... WHERE fecha > '2012-12-31'` de [`cases.md`](cases.md) §5.
+2. **Reset de datos — solo R3:** revertir lo sembrado **por `rental_id`** (no
+   por fecha), como en [`cases.md`](cases.md) §5. R5 no requiere reset (workload
+   solo SELECT/UPDATE; conteos invariantes).
 3. **Capturar estado inicial** (métricas de §6).
 4. **Ejecutar el caso:** comando exacto en [`cases.md`](cases.md) §3–§7.
    (Corre `sysbench` desde la **raíz del repo**: las rutas a `benchmark-scripts/`

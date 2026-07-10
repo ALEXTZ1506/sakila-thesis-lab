@@ -30,13 +30,14 @@ Para cada (caso R, motor, configuración):
 
 1. **Reset de cache.** Reiniciar el servicio (ver
    [`setup.md`](setup.md) §11). Espere a que acepte conexiones.
-2. **Reset de datos (solo R3 y R5).** Restaurar snapshot de la VM o
-   revertir los cambios DML acumulados de la corrida anterior. R3
-   acumula nuevos rentals/payments en fechas 2026+; R5 incrementa
-   `payment.amount` y reescribe `rental.return_date` aleatoriamente.
-   Sin este reset, las repeticiones (y la comparación entre VMs) partirían
-   de estados distintos. R1, R2 y R4 también modifican datos pero el
-   impacto es marginal en corridas cortas (60 seg).
+2. **Reset de datos (solo R3).** R3 inserta filas nuevas; entre corridas se
+   revierten **por `rental_id`, NO por fecha** — la inflación distribuyó los
+   datos canónicos por todos los años (2005–2037), así que un umbral de fecha
+   borraría datos reales. Se captura `MAX(rental_id)`/`MAX(payment_id)` antes de
+   sembrar y se elimina lo que quede por encima (ver §5). **R5 NO requiere reset
+   de datos:** su carga es solo SELECT/UPDATE, los conteos no cambian y la
+   deriva de valores (`amount`, `return_date`) no afecta throughput/latencia.
+   R1, R2 y R4 tampoco requieren reset (solo lectura / impacto marginal en 60 s).
 3. **Capturar estado inicial.** Tamaño del log del plugin (C2) y, si aplica,
    plan de la query (ver §8).
 4. **Ejecutar el caso.** Comando exacto en las secciones §3–§7.
@@ -172,11 +173,36 @@ Ajuste `p_avg_rentals_per_day` para escalar el volumen (200 → 1,000 da
 ~65,000 ops; advierta que la probabilidad de colisión sube con avg≥500 y
 revise el contador `v_skipped` que el procedure reporta al final).
 
-> Para que las corridas R3 entre configuraciones sean comparables, debe
-> revertir el estado de rental/payment entre runs. Lo más simple es
-> restaurar un snapshot de la VM tras el inflation; alternativamente,
-> `DELETE FROM rental WHERE rental_date > '2012-12-31';` + `DELETE FROM
-> payment WHERE payment_date > '2012-12-31';` elimina solo lo sembrado.
+> **Reset entre corridas — por `rental_id`, NO por fecha.** La inflación repartió
+> los datos canónicos por todos los años (2005–2037), así que un `DELETE` con
+> umbral de fecha (p. ej. `> '2012-12-31'`) **borraría datos reales**, no solo lo
+> sembrado. Como las filas sembradas siempre reciben un id mayor que el máximo
+> canónico, se captura la frontera **antes** de `CALL` y se borra por id (payment
+> primero, por la FK):
+>
+> ```bash
+> # Capturar ANTES de sembrar:  MAXR=MAX(rental_id)  MAXP=MAX(payment_id)
+> #   (frontera canónica de referencia: PostgreSQL ~513413, MariaDB ~518508)
+>
+> # PostgreSQL — como 'postgres'. session_replication_role=replica desactiva los
+> # triggers de FK: payment.rental_id es ON DELETE SET NULL SIN índice, y sin
+> # esto el borrado de rentals hace un seq-scan de payment por fila (se cuelga).
+> sudo -u postgres psql -d pagila -c \
+>   "SET session_replication_role=replica; \
+>    DELETE FROM payment WHERE payment_id > $MAXP; \
+>    DELETE FROM rental  WHERE rental_id  > $MAXR; \
+>    SET session_replication_role=origin;"
+>
+> # MariaDB — con FOREIGN_KEY_CHECKS=0.
+> mariadb -u thesis -p sakila -e \
+>   "SET FOREIGN_KEY_CHECKS=0; \
+>    DELETE FROM payment WHERE payment_id > $MAXP; \
+>    DELETE FROM rental  WHERE rental_id  > $MAXR; \
+>    SET FOREIGN_KEY_CHECKS=1;"
+> ```
+>
+> El snapshot golden de la VM se conserva como seguro de respaldo, no como el
+> reset rutinario entre corridas.
 
 ---
 
