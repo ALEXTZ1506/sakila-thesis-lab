@@ -159,6 +159,13 @@ Lista completa en [`docs/architecture.md`](docs/architecture.md) §5.
 
 Comandos de instalación en [`docs/setup.md`](docs/setup.md) §2.
 
+## Evidencia para anexos
+
+Los scripts `anexo_a.sh`, `anexo_b.sh`, `anexo_c.sh`, `anexo_d.sh` y
+`correr_todo_vm.sh` (raíz del repo) empaquetan la evidencia de configuración,
+rendimiento, logs de auditoría y seguridad para los anexos de la tesis. Uso
+y orden en [`docs/anexos-evidencia.md`](docs/anexos-evidencia.md).
+
 ## Licencia
 
 [MIT](LICENSE). Copyright © 2026 Joffre Alex Lainez Tomala.
